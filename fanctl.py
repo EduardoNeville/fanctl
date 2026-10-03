@@ -89,9 +89,12 @@ def gpu_temp():
 
 
 def open_port(port):
-    # -hupcl keeps DTR from dropping on close (would reset the ESP32)
-    subprocess.run(["stty", "-F", port, str(BAUD), "raw", "-echo", "-hupcl"],
-                   check=True)
+    # -hupcl keeps DTR from dropping on close (would reset the ESP32).
+    # clocal ignores carrier detect: the ESP32's USB CDC can report no
+    # carrier until DTR is asserted, which silently starves reads (os.read
+    # returns empty forever and everything looks like "no samples").
+    subprocess.run(["stty", "-F", port, str(BAUD), "raw", "-echo", "-hupcl",
+                    "clocal"], check=True)
     return os.open(port, os.O_RDWR | os.O_NOCTTY)
 
 

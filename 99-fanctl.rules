@@ -1,5 +1,9 @@
 # Stable name for the fanctl ESP32-C3 (native USB-Serial/JTAG, 303a:1001).
-# Install:  sudo cp 99-fanctl.rules /etc/udev/rules.d/ && sudo udevadm control --reload
+# Install:  sudo cp 99-fanctl.rules /etc/udev/rules.d/
+#           sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=tty
 # Then the unit can use --port /dev/fanctl instead of /dev/ttyACM0, and the
 # name survives USB re-enumeration and other ACM devices appearing.
-SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", SYMLINK+="fanctl", MODE="0660", GROUP="dialout"
+#
+# ID_MM_DEVICE_IGNORE keeps ModemManager off the port: it probes serial
+# devices (AT commands, DTR toggling) and can reset the ESP32 or eat bytes.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", SYMLINK+="fanctl", MODE="0660", GROUP="dialout", ENV{ID_MM_DEVICE_IGNORE}="1"
