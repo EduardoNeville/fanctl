@@ -138,6 +138,7 @@ def run(args):
     pts = parse_curve(args.curve)
     buf, state = b"", {"rpm": "-", "rx": time.monotonic()}
     duty, next_send, warned = 100.0, 0.0, 0.0
+    last_log, last_duty = 0.0, None
 
     while True:
         now = time.monotonic()
@@ -150,9 +151,13 @@ def run(args):
                 target = max(args.floor, curve(pts, temp))
                 duty = slew(duty, target, args.slew * args.interval)
                 os.write(fd, f"{int(round(duty))}\n".encode())
-                print(f"{time.strftime('%H:%M:%S')} temp={temp:5.1f}C "
-                      f"duty={int(round(duty)):3d}% rpm={state['rpm']}{source}",
-                      flush=True)
+                d = int(round(duty))
+                if last_duty is None or abs(d - last_duty) >= 1 \
+                        or now - last_log >= args.log_every:
+                    print(f"{time.strftime('%H:%M:%S')} temp={temp:5.1f}C "
+                          f"duty={d:3d}% rpm={state['rpm']}{source}",
+                          flush=True)
+                    last_log, last_duty = now, d
 
         buf = pump(fd, buf, state, timeout=0.2)
 
@@ -208,6 +213,9 @@ def main():
                    help="also read the NVIDIA GPU temp (nvidia-smi); the hotter "
                         "of GPU and motherboard sensors drives the curve")
     p.add_argument("--sweep", action="store_true", help="calibration sweep, then exit")
+    p.add_argument("--log-every", type=float, default=30.0,
+                   help="seconds between status lines when duty is steady "
+                        "(0 = log every interval; duty changes always log)")
     p.add_argument("--duties", default=DEFAULT_DUTIES, help="sweep steps, comma separated")
     p.add_argument("--settle", type=float, default=4.0, help="seconds to settle per step")
     p.add_argument("--samples", type=float, default=8.0, help="seconds of sampling per step")
@@ -218,6 +226,9 @@ def main():
         return 130
     except OSError as e:
         print(f"serial error: {e}", file=sys.stderr)
+        return 1
+    except subprocess.CalledProcessError as e:
+        print(f"port not ready ({e}); retrying shortly", file=sys.stderr)
         return 1
     return 0
 

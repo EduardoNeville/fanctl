@@ -1,18 +1,24 @@
 [Unit]
 Description=fanctl — ESP32 PWM/tach fan curve (Tesla P40 cooling)
 Documentation=file:/home/eduardoneville/pkgs/fanctl/README.md
-After=dev-ttyACM0.device
-BindsTo=dev-ttyACM0.device
+
+# Deliberately no BindsTo/Requires on the serial device: if the port vanishes
+# (USB re-enumeration, unplug, ESP32 reset) we want the restart loop to keep
+# trying forever, not to give up with a failed dependency. While we are down,
+# the ESP32 firmware fails safe to 100% duty.
+#
+# StartLimitIntervalSec=0 disables systemd's give-up threshold, so a restart
+# loop on a missing port is unlimited and cheap.
 StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-# root: /dev/ttyACM0 is root:dialout and root needs no group gymnastics.
-# (Alternatively: usermod -aG dialout eduardoneville + User=eduardoneville)
+# root: /dev/ttyACM0 (or the /dev/fanctl symlink) is root:dialout and root
+# avoids group gymnastics. To drop privileges: usermod -aG dialout USER and
+# set User=USER here.
 User=root
-ExecStart=/home/eduardoneville/pkgs/fanctl/fanctl.py --port /dev/ttyACM0 --gpu --floor 25 --interval 2
-# If the host dies or the port breaks, systemd restarts us; if we are dead for
-# 5 s, the ESP32 firmware fails safe to 100% duty. Loud, never quiet.
+ExecStart=/home/eduardoneville/pkgs/fanctl/fanctl.py --port /dev/ttyACM0 \
+    --gpu --floor 25 --interval 2 --log-every 30
 Restart=always
 RestartSec=3
 
