@@ -5,6 +5,7 @@ The ESP32 owns the 25 kHz PWM and the tach; this script owns the policy (curve,
 floor, slew limit). Protocol and failsafes: see README.md.
 
   ./fanctl.py --port /dev/ttyACM0                  # run the control loop
+  ./fanctl.py --port /dev/ttyACM0 --gpu            # + include the Tesla P40 temp
   ./fanctl.py --port /dev/ttyACM0 --sweep          # calibrate: stall duty, max rpm
   ./fanctl.py --port /dev/ttyACM0 --sweep --duties 100,50,25   # targeted A/B run
   ./fanctl.py --port /dev/null --temp-file /tmp/t # test the curve with no hardware
@@ -70,6 +71,23 @@ def hottest_temp():
     return max(temps) if temps else None
 
 
+def gpu_temp():
+    """Hottest NVIDIA GPU temp via nvidia-smi, or None if unavailable.
+
+    The P40 exposes no hwmon entry, so this is the only way its temp reaches
+    the curve. ~50 ms per call; one call per --interval is nothing.
+    """
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=temperature.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5)
+        vals = [float(v) for v in out.stdout.replace(",", " ").split()]
+        return max(vals) if vals else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
 def open_port(port):
     # -hupcl keeps DTR from dropping on close (would reset the ESP32)
     subprocess.run(["stty", "-F", port, str(BAUD), "raw", "-echo", "-hupcl"],
@@ -100,12 +118,19 @@ def pump(fd, buf, state, timeout=0.0):
 
 
 def read_temp(args):
+    """Return (temp_c, source_tag). GPU wins only when it is the hotter one,
+    so one blower serves the card without ignoring the CPUs it also feeds."""
     if args.temp_file:
         try:
-            return float(open(args.temp_file).read()), True
+            return float(open(args.temp_file).read()), " (sim)"
         except (OSError, ValueError):
-            return None, True
-    return hottest_temp(), False
+            return None, " (sim)"
+    t = hottest_temp()
+    if args.gpu:
+        g = gpu_temp()
+        if g is not None and (t is None or g > t):
+            return g, " (gpu)"
+    return t, ""
 
 
 def run(args):
@@ -118,16 +143,15 @@ def run(args):
         now = time.monotonic()
         if now >= next_send:
             next_send = now + args.interval
-            temp, simulated = read_temp(args)
+            temp, source = read_temp(args)
             if temp is None:
                 print("no readable sensor, holding duty", flush=True)
             else:
                 target = max(args.floor, curve(pts, temp))
                 duty = slew(duty, target, args.slew * args.interval)
                 os.write(fd, f"{int(round(duty))}\n".encode())
-                tag = " (sim)" if simulated else ""
                 print(f"{time.strftime('%H:%M:%S')} temp={temp:5.1f}C "
-                      f"duty={int(round(duty)):3d}% rpm={state['rpm']}{tag}",
+                      f"duty={int(round(duty)):3d}% rpm={state['rpm']}{source}",
                       flush=True)
 
         buf = pump(fd, buf, state, timeout=0.2)
@@ -180,6 +204,9 @@ def main():
     p.add_argument("--floor", type=float, default=20, help="minimum duty %%")
     p.add_argument("--slew", type=float, default=5, help="max duty change per second")
     p.add_argument("--temp-file", help="read temp from a file instead of sensors")
+    p.add_argument("--gpu", action="store_true",
+                   help="also read the NVIDIA GPU temp (nvidia-smi); the hotter "
+                        "of GPU and motherboard sensors drives the curve")
     p.add_argument("--sweep", action="store_true", help="calibration sweep, then exit")
     p.add_argument("--duties", default=DEFAULT_DUTIES, help="sweep steps, comma separated")
     p.add_argument("--settle", type=float, default=4.0, help="seconds to settle per step")
